@@ -1,0 +1,10 @@
+115_cookie.txt
+115_download_cookie.txt
+QCcode.jpg
+page.json
+log/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
