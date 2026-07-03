@@ -27,6 +27,8 @@ http://YOUR_METATUBE_HOST:8080
 
 ## FlareSolverr
 
+FlareSolverr 仅用于在你确认允许访问的站点上处理普通页面访问问题。请遵守目标站点的访问规则、robots/服务条款以及你所在地的法律要求。
+
 Docker Compose：
 
 ```yaml
@@ -77,7 +79,7 @@ javplay_aria2_dir="/PATH_IN_ARIA2_CONTAINER/JAV"
 
 ## 115
 
-无需提前填写 Cookie。首次触发下载时，插件会输出二维码并保存 `QCcode.jpg`。扫码后保存 Cookie。
+无需提前填写 Cookie。首次触发缓存流程时，插件会输出二维码并保存 `QCcode.jpg`。扫码后保存 Cookie。请只用于你有权保存和访问的内容。
 
 如果 Cookie 失效，删除：
 
@@ -86,6 +88,6 @@ javplay_aria2_dir="/PATH_IN_ARIA2_CONTAINER/JAV"
 115_download_cookie.txt
 ```
 
-然后重新触发下载并扫码。
+然后重新触发缓存流程并扫码。
 
 

@@ -27,7 +27,7 @@ javplay_cleanup_keep_hours=24
 javplay_cleanup_interval_minutes=60
 ```
 
-如果 FlareSolverr 访问 JavDB 需要代理：
+如果 FlareSolverr 访问目标索引站点需要代理：
 
 ```toml
 javplay_flaresolverr_proxy="http://YOUR_PROXY_HOST:7890"
