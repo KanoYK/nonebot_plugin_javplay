@@ -76,7 +76,7 @@ nonebot_plugin_javplay_public/
 ├── wait.mp4                 # 等待视频
 ├── requirements.txt         # Python 依赖
 ├── .env.example             # 配置示例
-├── docs/wiki/               # 可复制到 GitHub Wiki 的文档草稿
+├── docs/wiki/               # GitHub Wiki 页面源文件
 └── README.md
 ```
 
@@ -528,23 +528,6 @@ input-file=/config/aria2.session
 save-session-interval=60
 force-save=true
 ```
-
-## GitHub Wiki 草稿
-
-如果 README 对新手仍然太长，可以把下面目录中的文件复制到 GitHub Wiki：
-
-```text
-docs/wiki/
-```
-
-建议顺序：
-
-1. `Home.md`
-2. `01-Quick-Start.md`
-3. `02-Path-Mapping.md`
-4. `03-External-Tools.md`
-5. `04-Configuration.md`
-6. `05-Troubleshooting.md`
 
 ## 参考文档
 
