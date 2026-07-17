@@ -77,4 +77,16 @@ http://YOUR_NONEBOT_HOST:14514/webhook/jellyfin?token=YOUR_WEBHOOK_TOKEN
 
 首次进入缓存流程时，插件可能要求 115 扫码。扫码后 Cookie 会保存在插件目录，下次自动复用。
 
+## 6. 全量扫描
+
+管理员发送：
+
+```text
+完全扫描jav
+```
+
+插件会从 `page.json` 记录的进度开始持续扫描，直到 JavDB 页面为空或达到最大页。它不再只扫描默认 50 页；`javplay_full_scan_pages_per_run` 只是内部批次大小。
+
+每日最新影片会在北京时间 05:00 自动更新。
+
 

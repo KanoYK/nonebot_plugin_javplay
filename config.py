@@ -41,10 +41,13 @@ class Config(BaseModel):
     javplay_cache_host_path: Optional[str] = None
     javplay_jellyfin_media_path: str = ""  # Jellyfin container path for the same media root.
     javplay_crawl_pages_daily: int = 5
+    javplay_daily_crawl_hour: int = 5
+    javplay_daily_crawl_minute: int = 0
+    javplay_scheduler_timezone: str = "Asia/Shanghai"
     javplay_crawl_start_page: int = 1
     javplay_crawl_max_page: int = 2000
     javplay_full_scan_state_file: str = "page.json"
-    javplay_full_scan_pages_per_run: int = 50
+    javplay_full_scan_pages_per_run: int = 50  # Internal batch size; full scan continues until done.
     javplay_strm_url: str = ""
     javplay_manual_crawl_pages: int = 1
     javplay_manual_crawl_max_pages: int = 3

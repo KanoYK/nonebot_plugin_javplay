@@ -165,14 +165,60 @@ def _same_video_id(left: str, right: str) -> bool:
     return left.lower().replace("-", "") == right.lower().replace("-", "")
 
 
-def _find_active_jav_playback(expected_video_id: str = "") -> tuple[str, Optional[str]]:
+def _same_user_id(left: str, right: str) -> bool:
+    return (left or "").lower().replace("-", "") == (right or "").lower().replace("-", "")
+
+
+def _normalise_media_path(value: str) -> str:
+    return (value or "").replace("\\", "/").rstrip("/")
+
+
+def _path_under_root(path: str, root: str) -> bool:
+    path = _normalise_media_path(path).lower()
+    root = _normalise_media_path(root).lower()
+    if not path or not root:
+        return False
+    return path == root or path.startswith(root + "/")
+
+
+def _jellyfin_item_paths(item: dict) -> list[str]:
+    paths = []
+    path = item.get("Path")
+    if path:
+        paths.append(path)
+    for source in item.get("MediaSources") or []:
+        path = source.get("Path")
+        if path:
+            paths.append(path)
+    return paths
+
+
+def _is_javplay_jellyfin_item(item: dict) -> bool:
+    media_root = plugin_config.javplay_jellyfin_media_path
+    if not media_root:
+        logger.warning("javplay_jellyfin_media_path is not configured; refusing to infer JavPlay playback.")
+        return False
+
+    for path in _jellyfin_item_paths(item or {}):
+        if _path_under_root(path, media_root):
+            return True
+    return False
+
+
+def _find_active_jav_playback(expected_video_id: str = "", expected_user_id: str = "") -> tuple[str, Optional[str]]:
     expected_video_id = _extract_video_id(expected_video_id) if expected_video_id else ""
     sessions = get_active_sessions(
         plugin_config.javplay_jellyfin_url,
         plugin_config.javplay_jellyfin_api_key,
     )
     for session in sessions:
+        if expected_user_id and not _same_user_id(session.get("UserId"), expected_user_id):
+            continue
+
         item = session.get("NowPlayingItem") or {}
+        if not _is_javplay_jellyfin_item(item):
+            continue
+
         candidates = [
             item.get("Name", ""),
             item.get("OriginalTitle", ""),
@@ -321,21 +367,27 @@ def _read_full_scan_page() -> int:
     try:
         with open(state_file, "r", encoding="utf-8") as f:
             data = json.load(f)
+        if data.get("completed"):
+            return default_page
         return max(1, int(data.get("next_page", default_page)))
     except Exception:
         return default_page
 
 
-def _write_full_scan_page(next_page: int) -> None:
+def _write_full_scan_page(next_page: int, completed: bool = False, reason: str = "") -> None:
     max_page = max(1, plugin_config.javplay_crawl_max_page)
     start_page = max(1, plugin_config.javplay_crawl_start_page)
     if next_page > max_page:
+        completed = True
+        reason = reason or "max_page_reached"
         next_page = start_page
 
     state_file = _full_scan_state_file()
     os.makedirs(os.path.dirname(state_file), exist_ok=True)
     data = {
         "next_page": next_page,
+        "completed": bool(completed),
+        "reason": reason,
         "updated_at": int(time.time()),
     }
     with open(state_file, "w", encoding="utf-8") as f:
@@ -359,16 +411,86 @@ def _format_crawl_result(stats: dict) -> str:
     )
 
 
-def _parse_full_scan_pages(raw_arg: str) -> Optional[int]:
+def _parse_full_scan_start_page(raw_arg: str) -> Optional[int]:
     raw_arg = (raw_arg or "").strip()
-    default_pages = max(1, plugin_config.javplay_full_scan_pages_per_run)
     max_pages = max(1, plugin_config.javplay_crawl_max_page)
 
     if not raw_arg:
-        return min(default_pages, max_pages)
+        return _claim_full_scan_window()
     if not raw_arg.isdigit():
         return None
     return min(max(1, int(raw_arg)), max_pages)
+
+
+def _new_full_scan_stats(start_page: int) -> dict:
+    return {
+        "added": 0,
+        "existing": 0,
+        "invalid": 0,
+        "pages_requested": 0,
+        "pages_completed": 0,
+        "start_page": start_page,
+        "end_page": start_page,
+        "last_page": 0,
+        "stopped_reason": "",
+    }
+
+
+def _merge_full_scan_stats(total: dict, stats: dict) -> None:
+    for key in ("added", "existing", "invalid", "pages_requested", "pages_completed"):
+        total[key] = total.get(key, 0) + stats.get(key, 0)
+    total["end_page"] = max(total.get("end_page", 0), stats.get("end_page", 0))
+    total["last_page"] = max(total.get("last_page", 0), stats.get("last_page", 0))
+    total["stopped_reason"] = stats.get("stopped_reason") or total.get("stopped_reason", "")
+
+
+async def _run_full_scan_until_done(start_page: int) -> tuple[dict, bool, int, str]:
+    max_page = max(1, plugin_config.javplay_crawl_max_page)
+    batch_size = max(1, plugin_config.javplay_full_scan_pages_per_run)
+    current_page = max(1, min(start_page, max_page))
+    total = _new_full_scan_stats(current_page)
+    completed = False
+    reason = ""
+
+    while current_page <= max_page:
+        pages = min(batch_size, max_page - current_page + 1)
+        logger.info(f"Full JavDB scan batch: pages {current_page}-{current_page + pages - 1}")
+        stats = await asyncio.to_thread(
+            build_phantom_library,
+            pages,
+            plugin_config.javplay_proxy_http,
+            _media_host_path(),
+            plugin_config.javplay_flaresolverr_url,
+            plugin_config.javplay_strm_url,
+            plugin_config.javplay_flaresolverr_proxy,
+            current_page,
+        )
+        _merge_full_scan_stats(total, stats)
+
+        pages_completed = stats.get("pages_completed", 0)
+        if pages_completed > 0:
+            current_page += pages_completed
+            _write_full_scan_page(current_page, completed=False)
+
+        stopped_reason = stats.get("stopped_reason") or ""
+        if stopped_reason == "completed" and pages_completed >= pages:
+            continue
+
+        if stopped_reason == "no_items":
+            completed = total.get("pages_completed", 0) > 0
+            reason = "no_items"
+            break
+
+        reason = stopped_reason or "no_progress"
+        break
+
+    if current_page > max_page:
+        completed = True
+        reason = reason or "max_page_reached"
+
+    _write_full_scan_page(current_page, completed=completed, reason=reason)
+    total["stopped_reason"] = reason or total.get("stopped_reason", "completed")
+    return total, completed, _read_full_scan_page(), total["stopped_reason"]
 
 
 def _webhook_authorized(request: Request) -> bool:
@@ -645,33 +767,19 @@ async def handle_update_jav(args=CommandArg()):
 
 @full_scan_jav.handle()
 async def handle_full_scan_jav(args=CommandArg()):
-    pages = _parse_full_scan_pages(args.extract_plain_text())
-    if pages is None:
-        await full_scan_jav.finish("格式：完全扫描jav 或 完全扫描jav 50")
+    start_page = _parse_full_scan_start_page(args.extract_plain_text())
+    if start_page is None:
+        await full_scan_jav.finish("格式：完全扫描jav 或 完全扫描jav 120（从第 120 页开始持续扫描）")
 
     if manual_crawl_lock.locked():
         await full_scan_jav.finish("JavDB 更新任务正在运行，请稍后再试。")
 
     async with manual_crawl_lock:
-        start_page = _claim_full_scan_window()
-        end_page = start_page + pages - 1
-        await full_scan_jav.send(f"开始完整扫描 JavDB，本次爬取第 {start_page}-{end_page} 页。")
-
-        stats = await asyncio.to_thread(
-            build_phantom_library,
-            pages,
-            plugin_config.javplay_proxy_http,
-            _media_host_path(),
-            plugin_config.javplay_flaresolverr_url,
-            plugin_config.javplay_strm_url,
-            plugin_config.javplay_flaresolverr_proxy,
-            start_page,
+        await full_scan_jav.send(
+            f"开始完整扫描 JavDB，将从第 {start_page} 页持续扫描，"
+            f"直到页面为空或达到最大页 {max(1, plugin_config.javplay_crawl_max_page)}。"
         )
-
-        pages_completed = stats.get("pages_completed", 0)
-        if pages_completed > 0:
-            _mark_full_scan_window_done(start_page, pages_completed)
-        next_page = _read_full_scan_page()
+        stats, completed, next_page, reason = await _run_full_scan_until_done(start_page)
 
         refresh_success = False
         if stats.get("added", 0) > 0:
@@ -683,9 +791,10 @@ async def handle_full_scan_jav(args=CommandArg()):
 
         result = _format_crawl_result(stats)
         suffix = "媒体库刷新已触发。" if refresh_success else "没有新增或媒体库刷新失败。"
+        state_text = "整个数据库扫描已完成" if completed else f"扫描中断，下次从第 {next_page} 页继续"
         await full_scan_jav.finish(
-            f"完整扫描完成，第 {start_page}-{end_page} 页{result}"
-            f"下次从第 {next_page} 页继续，{suffix}"
+            f"完整扫描结束，从第 {start_page} 页开始{result}"
+            f"{state_text}（原因：{reason or 'completed'}），{suffix}"
         )
 
 
@@ -818,6 +927,21 @@ async def handle_jellyfin_webhook(request: Request, background_tasks: Background
             return {"status": "ignored", "reason": "No ItemName"}
 
         user_id = data.get("UserId")
+        if not _is_javplay_jellyfin_item(item):
+            active_video_id, active_user_id = await asyncio.to_thread(
+                _find_active_jav_playback,
+                video_id,
+                user_id or "",
+            )
+            if not active_video_id:
+                logger.info(
+                    f"Ignored Jellyfin PlaybackStart outside JavPlay media path: "
+                    f"video_id={video_id}, item_name={item_name!r}, user_id={user_id or ''}"
+                )
+                return {"status": "ignored", "reason": "Not JavPlay media library", "video_id": video_id}
+            video_id = active_video_id
+            user_id = user_id or active_user_id
+
         queued = await _queue_download(video_id, user_id, background_tasks, "jellyfin-webhook")
         if not queued:
             await send_jellyfin_msg(f"影片 {video_id} 已在下载队列中，请稍后。", user_id)
@@ -882,13 +1006,25 @@ async def handle_aria2_webhook(payload: Aria2WebhookPayload, request: Request):
 
 if scheduler:
 
-    @scheduler.scheduled_job("cron", hour=0, minute=0)
+    @scheduler.scheduled_job(
+        "cron",
+        hour=plugin_config.javplay_daily_crawl_hour,
+        minute=plugin_config.javplay_daily_crawl_minute,
+        timezone=plugin_config.javplay_scheduler_timezone,
+        id="javplay_daily_library_build",
+        replace_existing=True,
+    )
     async def scheduled_library_build():
         if manual_crawl_lock.locked():
             logger.info("Skip daily JavDB crawl because another crawl task is running.")
             return
 
-        logger.info("Starting daily JavDB phantom library build task...")
+        logger.info(
+            "Starting daily JavDB phantom library build task "
+            f"at {plugin_config.javplay_daily_crawl_hour:02d}:"
+            f"{plugin_config.javplay_daily_crawl_minute:02d} "
+            f"{plugin_config.javplay_scheduler_timezone}..."
+        )
         async with manual_crawl_lock:
             pages = max(1, plugin_config.javplay_crawl_pages_daily)
             start_page = max(1, plugin_config.javplay_crawl_start_page)

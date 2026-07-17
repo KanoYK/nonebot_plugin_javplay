@@ -16,6 +16,11 @@ javplay_db_path="/PATH_ON_BOT_HOST/JAV"
 javplay_cache_host_path="/PATH_ON_BOT_HOST/JAV"
 javplay_jellyfin_media_path="/PATH_IN_JELLYFIN_CONTAINER/JAV"
 javplay_strm_url="http://YOUR_NONEBOT_HOST:14514/wait.mp4"
+javplay_crawl_pages_daily=5
+javplay_daily_crawl_hour=5
+javplay_daily_crawl_minute=0
+javplay_scheduler_timezone="Asia/Shanghai"
+javplay_full_scan_pages_per_run=50
 ```
 
 推荐增加：
@@ -34,5 +39,17 @@ javplay_flaresolverr_proxy="http://YOUR_PROXY_HOST:7890"
 ```
 
 完整配置见 `.env.example`。
+
+## 触发范围
+
+`javplay_jellyfin_media_path` 不只是路径映射，也用于限制触发范围。Jellyfin webhook 和等待视频推断只会处理路径位于该目录下的播放项，其他媒体库不会触发 JavPlay。
+
+## 扫描任务
+
+- `更新jav`：测试用，只爬最新少量页面。
+- `完全扫描jav`：从 `page.json` 记录的页码开始，持续扫描直到数据库末尾。
+- 每日任务：默认北京时间 05:00 爬取最新 `javplay_crawl_pages_daily` 页。
+
+`javplay_full_scan_pages_per_run=50` 表示全量扫描的内部批次大小，不表示只扫描 50 页。
 
 

@@ -61,6 +61,8 @@ http://YOUR_NONEBOT_HOST:14514/wait.mp4?video_id=ABC-123
 
 Jellyfin 播放这个地址时，会看到插件目录中的 `wait.mp4`。插件会结合 Jellyfin 当前活跃播放会话确认用户真的在播放该番号，确认后才会加入缓存队列，避免 Jellyfin 客户端预加载旧视频导致误触发。
 
+插件还会校验当前 Jellyfin 播放项的文件路径必须位于 `javplay_jellyfin_media_path` 下。其他媒体库即使标题里包含类似番号的文本，也不会触发 JavPlay 下载流程。
+
 ## 文件结构
 
 ```text
@@ -213,7 +215,10 @@ javplay_strm_url="http://YOUR_NONEBOT_HOST:14514/wait.mp4"
 | `javplay_jellyfin_media_path` | 是 | Jellyfin 容器内媒体库路径 |
 | `javplay_strm_url` | 是 | 写入 `.strm` 的等待视频 URL |
 | `javplay_crawl_pages_daily` | 否 | 每日自动同步最新索引页数 |
-| `javplay_full_scan_pages_per_run` | 否 | `完全扫描jav` 每次扫描页数 |
+| `javplay_daily_crawl_hour` | 否 | 每日更新小时，默认北京时间 5 点 |
+| `javplay_daily_crawl_minute` | 否 | 每日更新分钟 |
+| `javplay_scheduler_timezone` | 否 | 定时任务时区，默认 `Asia/Shanghai` |
+| `javplay_full_scan_pages_per_run` | 否 | `完全扫描jav` 的内部批次大小；命令会连续跑完，不再只跑这一批 |
 | `javplay_cleanup_enabled` | 否 | 是否启用本地缓存清理 |
 | `javplay_cleanup_keep_hours` | 否 | 本地真实文件保留小时数 |
 
@@ -436,16 +441,24 @@ JAVPLAY_WEBHOOK_TOKEN="YOUR_WEBHOOK_TOKEN"
 完全扫描jav
 ```
 
-持续扫描历史索引页面。扫描进度会写入插件目录下的 `page.json`，Bot 重启后继续上次进度。请合理控制频率，并遵守目标站点规则。
+持续扫描历史索引页面。命令会从 `page.json` 记录的页数开始，按 `javplay_full_scan_pages_per_run` 分批处理，但不会在一批后停止，而是持续扫描到页面为空或达到 `javplay_crawl_max_page`。请合理控制频率，并遵守目标站点规则。
+
+也可以指定起始页重新扫描：
+
+```text
+完全扫描jav 120
+```
+
+表示从第 120 页开始持续扫描。
 
 ## 定时任务
 
 安装 `nonebot-plugin-apscheduler` 后，插件会注册：
 
-- 每天同步最新 `javplay_crawl_pages_daily` 页索引。
+- 每天北京时间 05:00 同步最新 `javplay_crawl_pages_daily` 页索引。
 - 每隔 `javplay_cleanup_interval_minutes` 分钟检查本地缓存清理。
 
-每日任务只补最新内容；历史数据建议用 `完全扫描jav` 慢慢扫。
+每日任务只补最新内容；历史数据用 `完全扫描jav` 一次性持续扫到数据库末尾。
 
 ## 缓存清理逻辑
 

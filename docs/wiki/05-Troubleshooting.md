@@ -62,3 +62,13 @@ force-save=true
 
 若仍误触发，检查 Jellyfin 客户端是否在恢复播放旧项目，或 webhook payload 中的 ItemName 是否不是当前项目。
 
+## 播放其他媒体库也触发 JavPlay
+
+检查 `.env` 中的：
+
+```toml
+javplay_jellyfin_media_path="/PATH_IN_JELLYFIN_CONTAINER/JAV"
+```
+
+它必须填写 Jellyfin 容器内的 JavPlay 媒体库根目录。插件会用这个路径过滤 webhook 和活跃播放会话；没有配置或配置成过宽路径时，可能无法正确隔离其他媒体库。
+
