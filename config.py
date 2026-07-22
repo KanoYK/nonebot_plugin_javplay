@@ -9,9 +9,20 @@ class Config(BaseModel):
     javplay_qq_user: int = 0
     javplay_qq_group: int = 0
 
+    # Storage mode. "aria2_cache" keeps the old 115 -> Aria2 -> local cache flow.
+    # "115_mount" stores selected videos in 115 and waits for Jellyfin to see the mounted path.
+    javplay_storage_mode: str = "aria2_cache"
+
     # 115. Leave the cookie empty to use QR-code login on first download.
     javplay_115_cookie: str = ""
     javplay_115_savepath: str = ""
+    javplay_115_mount_jellyfin_path: str = ""
+    javplay_115_min_video_size_mb: int = 300
+    javplay_115_junk_keywords: str = (
+        "广告,直播,最新地址,最新位址,社區,社区,收藏不迷路,防迷路,"
+        "网址,地址,防走丢,489155.com,.html,.txt"
+    )
+    javplay_115_require_wanted_selection: bool = True
     
     # JavDB proxy used by direct HTTP requests. Leave empty when unused.
     javplay_proxy_http: Optional[str] = None

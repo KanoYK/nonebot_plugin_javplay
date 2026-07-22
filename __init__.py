@@ -31,7 +31,7 @@ except Exception:
 
 from .config import Config
 from .downloader import tell_status
-from .downloader_115 import download_via_115
+from .downloader_115 import download_to_115_mount, download_via_115
 from .jellyfin_api import (
     get_active_sessions,
     refresh_jellyfin_item,
@@ -98,19 +98,18 @@ def _media_host_path(path: Optional[str] = None) -> str:
 
 logger.info(
     "JavPlay path config: "
+    f"storage_mode={plugin_config.javplay_storage_mode}, "
     f"db_path={plugin_config.javplay_db_path}, "
     f"host_media_path={_media_host_path()}, "
     f"aria2_dir={plugin_config.javplay_aria2_dir}, "
     f"115_savepath={plugin_config.javplay_115_savepath}, "
+    f"115_mount_jellyfin_path={plugin_config.javplay_115_mount_jellyfin_path or 'none'}, "
     f"flaresolverr_proxy={plugin_config.javplay_flaresolverr_proxy or 'none'}"
 )
 
-_REQUIRED_CONFIG_FIELDS = (
+_BASE_REQUIRED_CONFIG_FIELDS = (
     "javplay_115_savepath",
     "javplay_flaresolverr_url",
-    "javplay_aria2_rpc",
-    "javplay_aria2_secret",
-    "javplay_aria2_dir",
     "javplay_jellyfin_url",
     "javplay_jellyfin_api_key",
     "javplay_db_path",
@@ -118,12 +117,31 @@ _REQUIRED_CONFIG_FIELDS = (
     "javplay_jellyfin_media_path",
     "javplay_strm_url",
 )
+_ARIA2_REQUIRED_CONFIG_FIELDS = (
+    "javplay_aria2_rpc",
+    "javplay_aria2_secret",
+    "javplay_aria2_dir",
+)
+_115_MOUNT_REQUIRED_CONFIG_FIELDS = (
+    "javplay_115_mount_jellyfin_path",
+)
+
+
+def _storage_mode() -> str:
+    mode = (plugin_config.javplay_storage_mode or "aria2_cache").strip().lower()
+    return "115_mount" if mode in {"115", "115_mount", "mount", "cloud_mount"} else "aria2_cache"
 
 
 def _warn_missing_required_config() -> None:
+    required_fields = list(_BASE_REQUIRED_CONFIG_FIELDS)
+    if _storage_mode() == "115_mount":
+        required_fields.extend(_115_MOUNT_REQUIRED_CONFIG_FIELDS)
+    else:
+        required_fields.extend(_ARIA2_REQUIRED_CONFIG_FIELDS)
+
     missing = [
         field_name
-        for field_name in _REQUIRED_CONFIG_FIELDS
+        for field_name in required_fields
         if not getattr(plugin_config, field_name, None)
     ]
     if missing:
@@ -135,6 +153,13 @@ def _warn_missing_required_config() -> None:
 
 
 _warn_missing_required_config()
+
+
+def _real_media_roots_for_finish() -> Optional[list[str]]:
+    if _storage_mode() != "115_mount":
+        return None
+    root = plugin_config.javplay_115_mount_jellyfin_path
+    return [root] if root else None
 
 
 async def _queue_download(video_id: str, user_id: Optional[str], background_tasks: BackgroundTasks, source: str) -> bool:
@@ -568,7 +593,13 @@ def _find_local_complete_candidate(video_id: str) -> tuple[str, int]:
     return path, size
 
 
-async def _finish_download(video_id: str, gid: str, user_id: Optional[str], file_path: str = "") -> bool:
+async def _finish_download(
+    video_id: str,
+    gid: str,
+    user_id: Optional[str],
+    file_path: str = "",
+    real_media_roots: Optional[list[str]] = None,
+) -> bool:
     async with task_lock:
         task = active_downloads.pop(video_id, None)
         if gid:
@@ -587,6 +618,7 @@ async def _finish_download(video_id: str, gid: str, user_id: Optional[str], file
         plugin_config.javplay_jellyfin_url,
         plugin_config.javplay_jellyfin_api_key,
         video_id,
+        real_media_roots,
     )
 
     real_item = await asyncio.to_thread(
@@ -596,6 +628,7 @@ async def _finish_download(video_id: str, gid: str, user_id: Optional[str], file
         video_id,
         plugin_config.javplay_jellyfin_item_refresh_wait_seconds,
         plugin_config.javplay_jellyfin_item_refresh_interval_seconds,
+        real_media_roots,
     )
 
     if not real_item:
@@ -612,6 +645,7 @@ async def _finish_download(video_id: str, gid: str, user_id: Optional[str], file
             video_id,
             plugin_config.javplay_jellyfin_item_refresh_wait_seconds,
             plugin_config.javplay_jellyfin_item_refresh_interval_seconds,
+            real_media_roots,
         )
 
     if real_item:
@@ -870,7 +904,39 @@ async def background_download_task(video_id: str, user_id: Optional[str] = None)
         await _set_task_failed(video_id)
         return
 
-    logger.info("Using 115 for offline downloading...")
+    if _storage_mode() == "115_mount":
+        logger.info("Using 115 mount mode for offline downloading...")
+        mount_result = await asyncio.to_thread(
+            download_to_115_mount,
+            plugin_config.javplay_115_cookie,
+            magnet,
+            video_id,
+            plugin_config.javplay_115_savepath,
+            plugin_config.javplay_115_min_video_size_mb,
+            plugin_config.javplay_115_junk_keywords,
+            plugin_config.javplay_115_require_wanted_selection,
+        )
+
+        if not mount_result:
+            await send_jellyfin_msg(
+                f"影片 {video_id} 添加 115 挂载任务失败，请检查 115 文件选择或挂载状态。",
+                user_id,
+            )
+            await _set_task_failed(video_id)
+            return
+
+        async with task_lock:
+            active_downloads.setdefault(video_id, {})["user_id"] = user_id
+            active_downloads[video_id]["status"] = "refreshing"
+            active_downloads[video_id]["gid"] = None
+
+        cloud_path = mount_result.get("cloud_path") or ""
+        logger.info(f"115 mount task for {video_id} completed in cloud: {cloud_path}")
+        await send_jellyfin_msg(f"影片 {video_id} 已保存到 115 挂载目录，正在刷新媒体库。", user_id)
+        await _finish_download(video_id, "", user_id, cloud_path, _real_media_roots_for_finish())
+        return
+
+    logger.info("Using 115 + Aria2 cache mode for offline downloading...")
     gid = await asyncio.to_thread(
         download_via_115,
         plugin_config.javplay_115_cookie,

@@ -29,6 +29,29 @@ def _item_paths(item: dict) -> list[str]:
     return paths
 
 
+def _normalise_media_path(value: str) -> str:
+    return (value or "").replace("\\", "/").rstrip("/").lower()
+
+
+def _path_under_root(path: str, root: str) -> bool:
+    path = _normalise_media_path(path)
+    root = _normalise_media_path(root)
+    if not path or not root:
+        return False
+    return path == root or path.startswith(root + "/")
+
+
+def _item_under_roots(item: dict, media_roots: list[str] = None) -> bool:
+    roots = [root for root in (media_roots or []) if root]
+    if not roots:
+        return True
+    return any(
+        _path_under_root(path, root)
+        for path in _item_paths(item)
+        for root in roots
+    )
+
+
 def _is_real_media_item(item: dict) -> bool:
     for path in _item_paths(item):
         lower_path = path.lower()
@@ -37,6 +60,7 @@ def _is_real_media_item(item: dict) -> bool:
         if lower_path.endswith(VIDEO_EXTS):
             return True
     return False
+
 
 def refresh_jellyfin_library(base_url: str, api_key: str):
     """
@@ -67,7 +91,7 @@ def refresh_jellyfin_library(base_url: str, api_key: str):
         return False
 
 
-def find_jellyfin_item(base_url: str, api_key: str, video_id: str):
+def find_jellyfin_item(base_url: str, api_key: str, video_id: str, media_roots: list[str] = None):
     if not base_url or not api_key or not video_id:
         return None
 
@@ -90,6 +114,8 @@ def find_jellyfin_item(base_url: str, api_key: str, video_id: str):
         items = resp.json().get("Items") or []
         candidates = []
         for item in items:
+            if media_roots and not _item_under_roots(item, media_roots):
+                continue
             haystack = " ".join(
                 [
                     item.get("Name") or "",
@@ -142,8 +168,13 @@ def refresh_jellyfin_item(base_url: str, api_key: str, item_id: str) -> bool:
         return False
 
 
-def refresh_jellyfin_item_by_video_id(base_url: str, api_key: str, video_id: str) -> bool:
-    item = find_jellyfin_item(base_url, api_key, video_id)
+def refresh_jellyfin_item_by_video_id(
+    base_url: str,
+    api_key: str,
+    video_id: str,
+    media_roots: list[str] = None,
+) -> bool:
+    item = find_jellyfin_item(base_url, api_key, video_id, media_roots)
     if item and item.get("Id"):
         return refresh_jellyfin_item(base_url, api_key, item["Id"])
 
@@ -157,13 +188,14 @@ def wait_for_real_jellyfin_item(
     video_id: str,
     timeout_seconds: int = 180,
     interval_seconds: int = 5,
+    media_roots: list[str] = None,
 ):
     import time
 
     deadline = time.time() + max(1, timeout_seconds)
     interval = max(1, interval_seconds)
     while time.time() < deadline:
-        item = find_jellyfin_item(base_url, api_key, video_id)
+        item = find_jellyfin_item(base_url, api_key, video_id, media_roots)
         if item and _is_real_media_item(item):
             logger.info(f"Jellyfin real media item is ready for {video_id}: {item.get('Id')}")
             return item

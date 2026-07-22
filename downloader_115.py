@@ -2,6 +2,7 @@ import time
 import os
 import json
 import posixpath
+import re
 from io import StringIO
 from http.cookiejar import Cookie
 from http.cookies import Morsel
@@ -39,6 +40,21 @@ PROAPI_DOWNURL = "https://proapi.115.com/app/chrome/downurl"
 PROAPI_HOME = "https://proapi.115.com/"
 VIDEO_EXTS = (".mp4", ".mkv", ".avi", ".wmv", ".mov", ".ts", ".m2ts", ".flv", ".rmvb")
 DUPLICATE_TASK_ERRCODE = 10008
+DEFAULT_115_JUNK_KEYWORDS = (
+    "广告",
+    "直播",
+    "最新地址",
+    "最新位址",
+    "社區",
+    "社区",
+    "收藏不迷路",
+    "防迷路",
+    "防走丢",
+    "网址",
+    "地址",
+    ".html",
+    ".txt",
+)
 
 
 def _read_cookie_file(path: str) -> str:
@@ -253,8 +269,44 @@ def _normalise_code(value: str) -> str:
     return (value or "").lower().replace("-", "").replace("_", "").replace(" ", "")
 
 
+def _split_junk_keywords(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return DEFAULT_115_JUNK_KEYWORDS
+    keywords = []
+    for part in re.split(r"[,，\n\r]+", value):
+        keyword = part.strip()
+        if keyword:
+            keywords.append(keyword)
+    return tuple(keywords) or DEFAULT_115_JUNK_KEYWORDS
+
+
+def _normalise_115_path(value: str) -> str:
+    path = (value or "").replace("\\", "/").strip()
+    while "//" in path:
+        path = path.replace("//", "/")
+    return path.rstrip("/")
+
+
+def _video_115_savepath(base_path: str, video_id: str) -> str:
+    base_path = _normalise_115_path(base_path)
+    video_id = (video_id or "").strip()
+    if not base_path:
+        return video_id
+    return posixpath.join(base_path, video_id)
+
+
+def _extract_info_hash(magnet: str) -> str:
+    match = re.search(r"(?:btih:|btih%3A)([A-Za-z0-9]{32,40})", magnet or "", re.I)
+    return match.group(1).lower() if match else ""
+
+
 def _is_video_file(name: str) -> bool:
     return os.path.splitext(name or "")[1].lower() in VIDEO_EXTS
+
+
+def _is_junk_file(name: str, junk_keywords: tuple[str, ...]) -> bool:
+    lower_name = (name or "").lower()
+    return any(keyword.lower() in lower_name for keyword in junk_keywords)
 
 
 def _item_name(item: dict) -> str:
@@ -272,12 +324,29 @@ def _item_size(item: dict) -> int:
         return 0
 
 
+def _item_file_id(item: dict) -> str:
+    for key in ("fid", "file_id", "file_id_str", "cid"):
+        value = item.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
+def _item_pickcode(item: dict) -> str:
+    return str(item.get("pc") or item.get("pick_code") or item.get("pickcode") or "")
+
+
 def _item_extension(item: dict) -> str:
     ext = os.path.splitext(_item_basename(item))[1].lower()
     return ext if ext in VIDEO_EXTS else ".mp4"
 
 
-def _select_115_file(files: list, video_id: str) -> Optional[dict]:
+def _select_115_file(
+    files: list,
+    video_id: str,
+    min_size_bytes: int = 0,
+    junk_keywords: tuple[str, ...] = DEFAULT_115_JUNK_KEYWORDS,
+) -> Optional[dict]:
     if not files:
         return None
 
@@ -288,16 +357,198 @@ def _select_115_file(files: list, video_id: str) -> Optional[dict]:
         base_name = _item_basename(item)
         normalised_name = _normalise_code(base_name)
         size = _item_size(item)
+        if not _is_video_file(base_name):
+            continue
+        if _is_junk_file(base_name, junk_keywords):
+            continue
+        if min_size_bytes and size and size < min_size_bytes:
+            continue
         score = 0
         if normalised_video_id and normalised_video_id in normalised_name:
             score += 100
-        if _is_video_file(base_name):
-            score += 20
+        score += 20
         score += min(size // (1024 * 1024 * 1024), 20)
         scored.append((score, size, item))
 
     scored.sort(key=lambda pair: (pair[0], pair[1]), reverse=True)
-    return scored[0][2] if scored and scored[0][0] > 0 else files[0]
+    if scored:
+        return scored[0][2]
+
+    legacy_video_files = [
+        item for item in files
+        if _is_video_file(_item_basename(item))
+        and not _is_junk_file(_item_basename(item), junk_keywords)
+    ]
+    if legacy_video_files:
+        legacy_video_files.sort(key=_item_size, reverse=True)
+        return legacy_video_files[0]
+    return None
+
+
+def _extract_115_file_list(resp: dict) -> list:
+    if not isinstance(resp, dict):
+        return []
+
+    containers = [
+        resp,
+        resp.get("data"),
+        resp.get("info"),
+        resp.get("torrent"),
+    ]
+    for container in containers:
+        if isinstance(container, list):
+            return [item for item in container if isinstance(item, dict)]
+        if not isinstance(container, dict):
+            continue
+        for key in ("files", "file", "file_list", "list", "items"):
+            value = container.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+            if isinstance(value, dict):
+                nested = _extract_115_file_list(value)
+                if nested:
+                    return nested
+    return []
+
+
+def _wanted_index_for_item(files: list, selected: dict) -> str:
+    for key in ("wanted", "index", "idx", "file_id", "id"):
+        value = selected.get(key)
+        if value not in (None, "") and str(value).isdigit():
+            index = int(value)
+            if 0 <= index < len(files):
+                return str(index)
+
+    for index, item in enumerate(files):
+        if item is selected:
+            return str(index)
+        if _item_name(item) == _item_name(selected) and _item_size(item) == _item_size(selected):
+            return str(index)
+    return ""
+
+
+def _torrent_files_from_115(client: "P115Client", info_hash: str) -> list:
+    if not info_hash:
+        return []
+
+    attempts = []
+    if hasattr(client, "clouddownload_torrent"):
+        attempts.extend(
+            [
+                ("clouddownload_torrent info_hash", client.clouddownload_torrent, {"info_hash": info_hash}),
+                ("clouddownload_torrent sha1", client.clouddownload_torrent, {"sha1": info_hash}),
+            ]
+        )
+    if hasattr(client, "offline_torrent_info"):
+        attempts.extend(
+            [
+                ("offline_torrent_info info_hash", client.offline_torrent_info, {"info_hash": info_hash}),
+                ("offline_torrent_info sha1", client.offline_torrent_info, {"sha1": info_hash}),
+            ]
+        )
+
+    for label, method, payload in attempts:
+        try:
+            resp = method(payload)
+            files = _extract_115_file_list(resp)
+            if files:
+                logger.info(f"115 torrent file list obtained via {label}: {len(files)} files")
+                return files
+            logger.info(f"115 torrent file list empty via {label}: {resp}")
+        except Exception as e:
+            logger.info(f"115 torrent file list failed via {label}: {e}")
+    return []
+
+
+def _dir_id_from_response(resp: dict) -> str:
+    if not isinstance(resp, dict):
+        return ""
+    for container in (resp, resp.get("data")):
+        if not isinstance(container, dict):
+            continue
+        for key in ("cid", "file_id", "id", "pid"):
+            value = container.get(key)
+            if value not in (None, ""):
+                return str(value)
+    return ""
+
+
+def _get_115_dir_id(client: "P115Client", path: str) -> str:
+    path = _normalise_115_path(path)
+    if not path:
+        return "0"
+    try:
+        resp = client.fs_dir_getid(path)
+        dir_id = _dir_id_from_response(resp)
+        if dir_id:
+            return dir_id
+        logger.info(f"115 directory id not found for {path}: {resp}")
+    except Exception as e:
+        logger.info(f"Failed to get 115 directory id for {path}: {e}")
+    return ""
+
+
+def _list_115_dir_files(client: "P115Client", dir_id: str) -> list:
+    if not dir_id:
+        return []
+    try:
+        resp = client.fs_files({"cid": dir_id, "limit": 1000, "show_dir": 0, "type": 4})
+        return _extract_115_file_list(resp)
+    except Exception as e:
+        logger.info(f"Failed to list 115 directory {dir_id}: {e}")
+        return []
+
+
+def _search_115_video_files(client: "P115Client", video_id: str) -> list:
+    try:
+        search_resp = client.fs_search({"search_value": video_id, "type": 4})
+        return _extract_115_file_list(search_resp)
+    except Exception as e:
+        logger.info(f"[{video_id}] 115 search failed: {e}")
+        return []
+
+
+def _find_completed_115_file(
+    client: "P115Client",
+    video_id: str,
+    target_savepath: str = "",
+    min_size_bytes: int = 0,
+    junk_keywords: tuple[str, ...] = DEFAULT_115_JUNK_KEYWORDS,
+) -> Optional[dict]:
+    files = []
+    target_dir_id = _get_115_dir_id(client, target_savepath) if target_savepath else ""
+    if target_dir_id:
+        files = _list_115_dir_files(client, target_dir_id)
+
+    if not files:
+        files = _search_115_video_files(client, video_id)
+
+    return _select_115_file(files, video_id, min_size_bytes, junk_keywords)
+
+
+def _rename_115_file(client: "P115Client", item: dict, target_name: str, video_id: str) -> dict:
+    current_name = _item_basename(item)
+    if not target_name or current_name == target_name:
+        return item
+
+    file_id = _item_file_id(item)
+    if not file_id:
+        logger.info(f"[{video_id}] 115 file id missing; skip rename from {current_name} to {target_name}")
+        return item
+
+    try:
+        resp = client.fs_rename_app((file_id, target_name))
+        if resp.get("state"):
+            logger.info(f"[{video_id}] Renamed 115 file to {target_name}")
+            renamed = dict(item)
+            for key in ("n", "file_name", "name"):
+                if key in renamed:
+                    renamed[key] = target_name
+            return renamed
+        logger.warning(f"[{video_id}] 115 rename failed: {resp}")
+    except Exception as e:
+        logger.warning(f"[{video_id}] 115 rename error: {e}")
+    return item
 
 
 def _is_duplicate_115_task(resp: dict) -> bool:
@@ -520,11 +771,13 @@ def download_via_115(
         for attempt in range(max_retries):
             time.sleep(5)
 
-            search_resp = client.fs_search({"search_value": video_id, "type": 4})
-            data = search_resp.get("data", [])
+            data = _search_115_video_files(client, video_id)
             if data:
                 found_file = _select_115_file(data, video_id)
-                logger.info(f"[{video_id}] Found completed 115 file: {_item_name(found_file) or 'unknown'}")
+                if found_file:
+                    logger.info(f"[{video_id}] Found completed 115 file: {_item_name(found_file) or 'unknown'}")
+                    break
+                logger.info(f"[{video_id}] 115 search returned files, but no clean video candidate was selected.")
                 break
 
             logger.info(f"[{video_id}] 115 offline task not completed yet (attempt {attempt + 1}/{max_retries})")
@@ -533,7 +786,7 @@ def download_via_115(
             logger.error(f"[{video_id}] 115 offline task timed out or file not found.")
             return None
 
-        pickcode = found_file.get("pc")
+        pickcode = _item_pickcode(found_file)
         if not pickcode:
             logger.error(f"[{video_id}] Could not find pickcode in the 115 search results.")
             return None
@@ -556,4 +809,139 @@ def download_via_115(
 
     except Exception as e:
         logger.error(f"Error in 115 download flow: {e}")
+        return None
+
+
+def download_to_115_mount(
+    cookie: str,
+    magnet: str,
+    video_id: str,
+    savepath: str,
+    min_video_size_mb: int = 300,
+    junk_keywords: str = "",
+    require_wanted_selection: bool = True,
+) -> Optional[dict]:
+    """
+    Submit a magnet to 115 and keep the selected video in the mounted 115 media path.
+
+    Returns metadata for the selected 115 file on success. This function does not
+    obtain a direct URL and does not push anything to Aria2.
+    """
+    if not P115Client:
+        logger.error("p115client not installed, cannot use 115 download.")
+        return None
+
+    try:
+        client = _create_115_client(cookie)
+        if not client:
+            logger.error("115 login is unavailable; cannot use 115 mount mode.")
+            return None
+
+        info_hash = _extract_info_hash(magnet)
+        target_savepath = _video_115_savepath(savepath, video_id)
+        min_size = max(0, int(min_video_size_mb or 0)) * 1024 * 1024
+        junk_list = _split_junk_keywords(junk_keywords)
+        task_hash = info_hash
+        selected_file = None
+        wanted = ""
+
+        if info_hash:
+            torrent_files = _torrent_files_from_115(client, info_hash)
+            selected_file = _select_115_file(torrent_files, video_id, min_size, junk_list)
+            if selected_file:
+                wanted = _wanted_index_for_item(torrent_files, selected_file)
+                logger.info(
+                    f"[{video_id}] 115 selected torrent file: "
+                    f"wanted={wanted}, name={_item_name(selected_file)}, size={_item_size(selected_file)}"
+                )
+
+        if selected_file and wanted:
+            payload = {
+                "info_hash": info_hash,
+                "wanted": wanted,
+                "savepath": target_savepath,
+            }
+            resp = client.clouddownload_task_add_bt(payload)
+            if not resp.get("state"):
+                if _is_duplicate_115_task(resp):
+                    task_hash = (resp.get("data") or {}).get("info_hash") or resp.get("info_hash") or task_hash
+                    files = _extract_115_file_list(resp)
+                    duplicate_file = _select_115_file(files, video_id, min_size, junk_list)
+                    if duplicate_file:
+                        selected_file = duplicate_file
+                    logger.info(
+                        f"[{video_id}] 115 selected offline task already exists, hash: {task_hash}. "
+                        "Waiting for mounted media file..."
+                    )
+                else:
+                    logger.error(f"[{video_id}] 115 failed to add selected BT task: {resp}")
+                    return None
+            else:
+                task_hash = resp.get("info_hash") or task_hash
+                logger.info(
+                    f"[{video_id}] 115 selected BT task added successfully, hash: {task_hash}. "
+                    "Waiting for mounted media file..."
+                )
+        else:
+            if require_wanted_selection:
+                logger.error(
+                    f"[{video_id}] Cannot add 115 mount task safely: "
+                    "torrent file list or wanted index is unavailable."
+                )
+                return None
+
+            logger.warning(
+                f"[{video_id}] Adding 115 task without wanted selection. "
+                "This may keep unwanted files in the 115 folder."
+            )
+            resp = client.clouddownload_task_add_url({"url": magnet, "savepath": target_savepath})
+            if not resp.get("state"):
+                if _is_duplicate_115_task(resp):
+                    task_hash = (resp.get("data") or {}).get("info_hash") or resp.get("info_hash") or task_hash
+                    files = _extract_115_file_list(resp)
+                    selected_file = _select_115_file(files, video_id, min_size, junk_list) or selected_file
+                    logger.info(f"[{video_id}] 115 offline task already exists, hash: {task_hash}.")
+                else:
+                    logger.error(f"[{video_id}] 115 failed to add magnet task: {resp}")
+                    return None
+            else:
+                task_hash = resp.get("info_hash") or task_hash
+                logger.info(f"[{video_id}] 115 offline task added successfully, hash: {task_hash}.")
+
+        max_retries = 60
+        found_file = None
+        for attempt in range(max_retries):
+            time.sleep(5)
+            found_file = _find_completed_115_file(
+                client,
+                video_id,
+                target_savepath,
+                min_size,
+                junk_list,
+            )
+            if found_file:
+                logger.info(f"[{video_id}] Found completed mounted 115 file: {_item_name(found_file) or 'unknown'}")
+                break
+            logger.info(f"[{video_id}] 115 mounted media file not ready yet (attempt {attempt + 1}/{max_retries})")
+
+        if not found_file:
+            logger.error(f"[{video_id}] 115 mount task timed out or clean video file not found.")
+            return None
+
+        target_name = f"{video_id}{_item_extension(found_file)}"
+        found_file = _rename_115_file(client, found_file, target_name, video_id)
+        file_name = _item_basename(found_file) or target_name
+        cloud_path = posixpath.join(target_savepath, file_name)
+        return {
+            "mode": "115_mount",
+            "info_hash": task_hash,
+            "cloud_path": cloud_path,
+            "savepath": target_savepath,
+            "file_name": file_name,
+            "size": _item_size(found_file),
+            "pickcode": _item_pickcode(found_file),
+        }
+
+    except Exception as e:
+        logger.error(f"Error in 115 mount download flow: {e}")
         return None
