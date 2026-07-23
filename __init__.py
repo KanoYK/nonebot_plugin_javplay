@@ -129,7 +129,8 @@ _115_MOUNT_REQUIRED_CONFIG_FIELDS = (
 
 def _storage_mode() -> str:
     mode = (plugin_config.javplay_storage_mode or "aria2_cache").strip().lower()
-    return "115_mount" if mode in {"115", "115_mount", "mount", "cloud_mount"} else "aria2_cache"
+    mount_modes = {"115", "115_mount", "mount", "cloud_mount", "clouddrive", "clouddrive_mount"}
+    return "115_mount" if mode in mount_modes else "aria2_cache"
 
 
 def _warn_missing_required_config() -> None:

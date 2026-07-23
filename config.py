@@ -10,7 +10,8 @@ class Config(BaseModel):
     javplay_qq_group: int = 0
 
     # Storage mode. "aria2_cache" keeps the old 115 -> Aria2 -> local cache flow.
-    # "115_mount" stores selected videos in 115 and waits for Jellyfin to see the mounted path.
+    # "115_mount"/"clouddrive_mount" stores selected videos in 115 and waits for Jellyfin
+    # to see the mounted path.
     javplay_storage_mode: str = "aria2_cache"
 
     # 115. Leave the cookie empty to use QR-code login on first download.
