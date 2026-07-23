@@ -39,6 +39,7 @@ DOWNLOAD_APP_CANDIDATES = ("chrome", "desktop", "web2", "web")
 PROAPI_DOWNURL = "https://proapi.115.com/app/chrome/downurl"
 PROAPI_HOME = "https://proapi.115.com/"
 VIDEO_EXTS = (".mp4", ".mkv", ".avi", ".wmv", ".mov", ".ts", ".m2ts", ".flv", ".rmvb")
+PREFERRED_VIDEO_EXTS = (".mp4", ".mkv", ".avi", ".wmv", ".mov", ".flv", ".rmvb")
 DUPLICATE_TASK_ERRCODE = 10008
 DEFAULT_115_JUNK_KEYWORDS = (
     "广告",
@@ -349,6 +350,21 @@ def _item_extension(item: dict) -> str:
     return ext if ext in VIDEO_EXTS else ".mp4"
 
 
+def _video_extension_score(base_name: str) -> int:
+    ext = os.path.splitext(base_name or "")[1].lower()
+    if ext == ".mp4":
+        return 80
+    if ext == ".mkv":
+        return 70
+    if ext in PREFERRED_VIDEO_EXTS:
+        return 60
+    if ext in (".m2ts", ".ts"):
+        return 5
+    if ext in VIDEO_EXTS:
+        return 20
+    return 0
+
+
 def _select_115_file(
     files: list,
     video_id: str,
@@ -374,7 +390,7 @@ def _select_115_file(
         score = 0
         if normalised_video_id and normalised_video_id in normalised_name:
             score += 100
-        score += 20
+        score += _video_extension_score(base_name)
         score += min(size // (1024 * 1024 * 1024), 20)
         scored.append((score, size, item))
 
