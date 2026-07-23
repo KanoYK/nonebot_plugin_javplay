@@ -15,7 +15,7 @@ javplay_jellyfin_api_key="YOUR_JELLYFIN_API_KEY"
 javplay_db_path="/PATH_ON_BOT_HOST/JAV"
 javplay_cache_host_path="/PATH_ON_BOT_HOST/JAV"
 javplay_jellyfin_media_path="/PATH_IN_JELLYFIN_CONTAINER/JAV"
-javplay_strm_url="http://YOUR_NONEBOT_HOST:14514/wait.mp4"
+javplay_strm_url="http://YOUR_NONEBOT_HOST:14514/trigger/{video_id}.mp4"
 javplay_crawl_pages_daily=5
 javplay_daily_crawl_hour=5
 javplay_daily_crawl_minute=0
@@ -42,7 +42,7 @@ javplay_flaresolverr_proxy="http://YOUR_PROXY_HOST:7890"
 
 ## 触发范围
 
-`javplay_jellyfin_media_path` 不只是路径映射，也用于限制触发范围。Jellyfin webhook 和等待视频推断只会处理路径位于该目录下的播放项，其他媒体库不会触发 JavPlay。
+`javplay_jellyfin_media_path` 不只是路径映射，也用于限制触发范围。Jellyfin webhook 和虚拟入口推断只会处理路径位于该目录下的播放项，其他媒体库不会触发 JavPlay。
 
 ## 扫描任务
 

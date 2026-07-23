@@ -6,7 +6,6 @@ import time
 from typing import Any, Dict, Optional
 
 from fastapi import BackgroundTasks, Request, Response
-from fastapi.responses import FileResponse
 from nonebot import get_app, get_plugin_config, logger, on_command
 from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
@@ -259,55 +258,63 @@ def _find_active_jav_playback(expected_video_id: str = "", expected_user_id: str
     return "", None
 
 
-def _wait_video_response():
-    wait_video_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "wait.mp4"))
-    if os.path.exists(wait_video_path):
-        return FileResponse(
-            wait_video_path,
-            media_type="video/mp4",
-            filename="wait.mp4",
-            headers={"Cache-Control": "no-store"},
+def _message_only_virtual_response():
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
+
+
+async def _queue_from_virtual_stream(
+    video_id: str,
+    background_tasks: BackgroundTasks,
+    source: str,
+) -> bool:
+    active_video_id, user_id = await asyncio.to_thread(_find_active_jav_playback, video_id)
+    if not active_video_id:
+        logger.info(
+            f"Virtual stream requested for {video_id} without queue; "
+            "no matching active Jellyfin playback session."
         )
-    return Response(
-        content=b"",
-        media_type="video/mp4",
-        headers={"Cache-Control": "no-store"},
-    )
+        return False
+
+    logger.info(f"Confirmed virtual playback from active session: {active_video_id}")
+    return await _queue_download(active_video_id, user_id, background_tasks, source)
+
+
+@app.get("/trigger/{video_id}.mp4")
+async def trigger_virtual_video(video_id: str, background_tasks: BackgroundTasks):
+    await _queue_from_virtual_stream(video_id, background_tasks, "virtual-stream")
+    return _message_only_virtual_response()
+
+
+@app.get("/trigger.mp4")
+async def trigger_virtual_video_query(request: Request, background_tasks: BackgroundTasks):
+    video_id = request.query_params.get("video_id") or request.query_params.get("id") or ""
+    if video_id:
+        await _queue_from_virtual_stream(video_id, background_tasks, "virtual-stream")
+    else:
+        logger.info("Virtual stream requested without video_id; no download queued.")
+    return _message_only_virtual_response()
 
 
 @app.get("/wait.mp4")
 async def wait_video(request: Request, background_tasks: BackgroundTasks):
     video_id = request.query_params.get("video_id") or request.query_params.get("id") or ""
-    user_id = None
     if video_id:
-        active_video_id, user_id = await asyncio.to_thread(_find_active_jav_playback, video_id)
-        if active_video_id:
-            video_id = active_video_id
-            logger.info(f"Confirmed wait video playback from active session: {video_id}")
-        else:
-            logger.info(f"Serving wait.mp4 for {video_id} without queue; no matching active playback session.")
-            return _wait_video_response()
+        await _queue_from_virtual_stream(video_id, background_tasks, "wait-video-legacy")
     else:
         video_id, user_id = await asyncio.to_thread(_find_active_jav_playback)
         if video_id:
             logger.info(f"Inferred Jellyfin playback from active session: {video_id}")
+            await _queue_download(video_id, user_id, background_tasks, "wait-video-legacy")
+        else:
+            logger.info("Legacy wait.mp4 requested without video_id; no download queued.")
 
-    if video_id:
-        await _queue_download(video_id, user_id, background_tasks, "wait-video")
-    else:
-        logger.info("Serving wait.mp4 without video_id; no download queued.")
-
-    return _wait_video_response()
+    return _message_only_virtual_response()
 
 
 @app.get("/wait/{video_id}.mp4")
 async def wait_video_with_id(video_id: str, background_tasks: BackgroundTasks):
-    active_video_id, user_id = await asyncio.to_thread(_find_active_jav_playback, video_id)
-    if active_video_id:
-        await _queue_download(active_video_id, user_id, background_tasks, "wait-video-path")
-    else:
-        logger.info(f"Serving wait/{video_id}.mp4 without queue; no matching active playback session.")
-    return _wait_video_response()
+    await _queue_from_virtual_stream(video_id, background_tasks, "wait-video-path-legacy")
+    return _message_only_virtual_response()
 
 MEDIA_CACHE_EXTS = {
     ".mp4",
@@ -670,7 +677,7 @@ async def _finish_download(
         await send_jellyfin_msg(f"影片 {video_id} 已在媒体库中可见，但元数据刷新可能仍在后台进行。", user_id)
     else:
         await send_jellyfin_msg(
-            f"影片 {video_id} 已下载完成，但 Jellyfin 暂未扫描到真实文件，已保留等待视频，请稍后再试。",
+            f"影片 {video_id} 已下载完成，但 Jellyfin 暂未扫描到真实文件，已保留虚拟入口，请稍后再试。",
             user_id,
         )
         return False

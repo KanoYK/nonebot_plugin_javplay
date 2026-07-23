@@ -55,7 +55,7 @@ def _item_under_roots(item: dict, media_roots: list[str] = None) -> bool:
 def _is_real_media_item(item: dict) -> bool:
     for path in _item_paths(item):
         lower_path = path.lower()
-        if lower_path.endswith(".strm") or "wait.mp4" in lower_path:
+        if lower_path.endswith(".strm") or "wait.mp4" in lower_path or "/trigger/" in lower_path or "trigger.mp4" in lower_path:
             continue
         if lower_path.endswith(VIDEO_EXTS):
             return True

@@ -109,7 +109,7 @@ def build_phantom_library(
     proxy: str,
     db_path: str,
     flaresolverr_url: str = None,
-    strm_url: str = "http://127.0.0.1/wait.mp4",
+    strm_url: str = "http://127.0.0.1/trigger/{video_id}.mp4",
     flaresolverr_proxy: str = None,
     start_page: int = 1,
 ):

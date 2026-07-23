@@ -58,7 +58,7 @@ force-save=true
 
 ## 旧番号被误触发
 
-插件会校验 `wait.mp4?video_id=番号` 与 Jellyfin 活跃播放会话是否一致。若没有匹配，会只播放等待视频，不会进入缓存队列。
+插件会校验触发 URL 中的番号与 Jellyfin 活跃播放会话是否一致。若没有匹配，不会进入缓存队列。
 
 若仍误触发，检查 Jellyfin 客户端是否在恢复播放旧项目，或 webhook payload 中的 ItemName 是否不是当前项目。
 
