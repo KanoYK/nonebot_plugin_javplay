@@ -295,6 +295,14 @@ def _video_115_savepath(base_path: str, video_id: str) -> str:
     return posixpath.join(base_path, video_id)
 
 
+def _default_temp_115_savepath(savepath: str) -> str:
+    savepath = _normalise_115_path(savepath)
+    parent = posixpath.dirname(savepath) if savepath else ""
+    if not parent or parent == "/":
+        return "/.javplay_tmp"
+    return posixpath.join(parent, ".javplay_tmp")
+
+
 def _extract_info_hash(magnet: str) -> str:
     match = re.search(r"(?:btih:|btih%3A)([A-Za-z0-9]{32,40})", magnet or "", re.I)
     return match.group(1).lower() if match else ""
@@ -488,6 +496,36 @@ def _get_115_dir_id(client: "P115Client", path: str) -> str:
     return ""
 
 
+def _ensure_115_dir_id(client: "P115Client", path: str) -> str:
+    path = _normalise_115_path(path)
+    if not path:
+        return "0"
+
+    dir_id = _get_115_dir_id(client, path)
+    if dir_id:
+        return dir_id
+
+    for method_name in ("fs_makedirs_app", "fs_makedirs", "fs_mkdir_app", "fs_mkdir"):
+        method = getattr(client, method_name, None)
+        if not method:
+            continue
+        try:
+            resp = method(path)
+            dir_id = _dir_id_from_response(resp)
+            if dir_id:
+                logger.info(f"Created 115 directory via {method_name}: {path}")
+                return dir_id
+            dir_id = _get_115_dir_id(client, path)
+            if dir_id:
+                logger.info(f"Created 115 directory via {method_name}: {path}")
+                return dir_id
+            logger.info(f"115 directory create returned no id via {method_name}: {resp}")
+        except Exception as e:
+            logger.info(f"Failed to create 115 directory via {method_name} for {path}: {e}")
+
+    return ""
+
+
 def _list_115_dir_files(client: "P115Client", dir_id: str) -> list:
     if not dir_id:
         return []
@@ -524,6 +562,33 @@ def _find_completed_115_file(
         files = _search_115_video_files(client, video_id)
 
     return _select_115_file(files, video_id, min_size_bytes, junk_keywords)
+
+
+def _move_115_file(client: "P115Client", item: dict, target_savepath: str, video_id: str) -> bool:
+    file_id = _item_file_id(item)
+    if not file_id:
+        logger.warning(f"[{video_id}] 115 file id missing; cannot move selected file.")
+        return False
+
+    target_dir_id = _ensure_115_dir_id(client, target_savepath)
+    if not target_dir_id:
+        logger.warning(f"[{video_id}] 115 target directory unavailable: {target_savepath}")
+        return False
+
+    for method_name in ("fs_move_app", "fs_move_open", "fs_move"):
+        method = getattr(client, method_name, None)
+        if not method:
+            continue
+        try:
+            resp = method(file_id, pid=target_dir_id)
+            if resp.get("state"):
+                logger.info(f"[{video_id}] Moved selected 115 file to {target_savepath} via {method_name}")
+                return True
+            logger.info(f"[{video_id}] 115 move returned false via {method_name}: {resp}")
+        except Exception as e:
+            logger.info(f"[{video_id}] 115 move failed via {method_name}: {e}")
+
+    return False
 
 
 def _rename_115_file(client: "P115Client", item: dict, target_name: str, video_id: str) -> dict:
@@ -820,6 +885,7 @@ def download_to_115_mount(
     min_video_size_mb: int = 300,
     junk_keywords: str = "",
     require_wanted_selection: bool = True,
+    temp_savepath: str = "",
 ) -> Optional[dict]:
     """
     Submit a magnet to 115 and keep the selected video in the mounted 115 media path.
@@ -839,11 +905,14 @@ def download_to_115_mount(
 
         info_hash = _extract_info_hash(magnet)
         target_savepath = _video_115_savepath(savepath, video_id)
+        fallback_temp_base = _normalise_115_path(temp_savepath) or _default_temp_115_savepath(savepath)
+        temp_target_savepath = _video_115_savepath(fallback_temp_base, video_id)
         min_size = max(0, int(min_video_size_mb or 0)) * 1024 * 1024
         junk_list = _split_junk_keywords(junk_keywords)
         task_hash = info_hash
         selected_file = None
         wanted = ""
+        used_isolated_fallback = False
 
         if info_hash:
             torrent_files = _torrent_files_from_115(client, info_hash)
@@ -884,29 +953,38 @@ def download_to_115_mount(
                 )
         else:
             if require_wanted_selection:
-                logger.error(
-                    f"[{video_id}] Cannot add 115 mount task safely: "
-                    "torrent file list or wanted index is unavailable."
+                logger.warning(
+                    f"[{video_id}] Torrent file list or wanted index is unavailable. "
+                    f"Falling back to isolated 115 path: {temp_target_savepath}"
                 )
-                return None
+                add_savepath = temp_target_savepath
+                used_isolated_fallback = True
+            else:
+                logger.warning(
+                    f"[{video_id}] Adding 115 task without wanted selection. "
+                    "This may keep unwanted files in the 115 folder."
+                )
+                add_savepath = target_savepath
 
-            logger.warning(
-                f"[{video_id}] Adding 115 task without wanted selection. "
-                "This may keep unwanted files in the 115 folder."
-            )
-            resp = client.clouddownload_task_add_url({"url": magnet, "savepath": target_savepath})
+            resp = client.clouddownload_task_add_url({"url": magnet, "savepath": add_savepath})
             if not resp.get("state"):
                 if _is_duplicate_115_task(resp):
                     task_hash = (resp.get("data") or {}).get("info_hash") or resp.get("info_hash") or task_hash
                     files = _extract_115_file_list(resp)
                     selected_file = _select_115_file(files, video_id, min_size, junk_list) or selected_file
-                    logger.info(f"[{video_id}] 115 offline task already exists, hash: {task_hash}.")
+                    logger.info(
+                        f"[{video_id}] 115 offline task already exists, hash: {task_hash}. "
+                        f"Waiting for clean media file from {'isolated fallback' if used_isolated_fallback else 'target path'}."
+                    )
                 else:
                     logger.error(f"[{video_id}] 115 failed to add magnet task: {resp}")
                     return None
             else:
                 task_hash = resp.get("info_hash") or task_hash
-                logger.info(f"[{video_id}] 115 offline task added successfully, hash: {task_hash}.")
+                logger.info(
+                    f"[{video_id}] 115 offline task added successfully, hash: {task_hash}, "
+                    f"savepath={add_savepath}."
+                )
 
         max_retries = 60
         found_file = None
@@ -915,7 +993,7 @@ def download_to_115_mount(
             found_file = _find_completed_115_file(
                 client,
                 video_id,
-                target_savepath,
+                temp_target_savepath if used_isolated_fallback else target_savepath,
                 min_size,
                 junk_list,
             )
@@ -930,6 +1008,9 @@ def download_to_115_mount(
 
         target_name = f"{video_id}{_item_extension(found_file)}"
         found_file = _rename_115_file(client, found_file, target_name, video_id)
+        if used_isolated_fallback and not _move_115_file(client, found_file, target_savepath, video_id):
+            logger.error(f"[{video_id}] Failed to move selected 115 file from isolated fallback to target path.")
+            return None
         file_name = _item_basename(found_file) or target_name
         cloud_path = posixpath.join(target_savepath, file_name)
         return {

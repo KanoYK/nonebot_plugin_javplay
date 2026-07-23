@@ -924,6 +924,7 @@ async def background_download_task(video_id: str, user_id: Optional[str] = None)
             plugin_config.javplay_115_min_video_size_mb,
             plugin_config.javplay_115_junk_keywords,
             plugin_config.javplay_115_require_wanted_selection,
+            plugin_config.javplay_115_temp_savepath,
         )
 
         if not mount_result:

@@ -62,6 +62,16 @@ def _is_real_media_item(item: dict) -> bool:
     return False
 
 
+def _session_notify_score(session: dict) -> tuple[int, int, str]:
+    play_state = session.get("PlayState") or {}
+    now_playing = session.get("NowPlayingItem") or {}
+    return (
+        1 if now_playing else 0,
+        0 if play_state.get("IsPaused") else 1,
+        session.get("LastActivityDate") or session.get("LastPlaybackCheckIn") or "",
+    )
+
+
 def refresh_jellyfin_library(base_url: str, api_key: str):
     """
     Call Jellyfin API to refresh the entire library.
@@ -238,10 +248,10 @@ def send_jellyfin_notification(
                 if _normalise_user_id(s.get("UserId")) == target_user_id
             ]
             if matched_sessions:
-                sessions = matched_sessions
+                sessions = [max(matched_sessions, key=_session_notify_score)]
                 logger.info(
-                    f"Sending Jellyfin notification to matched user sessions: "
-                    f"user_id={user_id}, count={len(sessions)}, total_sessions={total_sessions}"
+                    f"Sending Jellyfin notification to matched user session: "
+                    f"user_id={user_id}, matched={len(matched_sessions)}, total_sessions={total_sessions}"
                 )
             else:
                 logger.warning(

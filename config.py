@@ -17,6 +17,7 @@ class Config(BaseModel):
     # 115. Leave the cookie empty to use QR-code login on first download.
     javplay_115_cookie: str = ""
     javplay_115_savepath: str = ""
+    javplay_115_temp_savepath: str = ""
     javplay_115_mount_jellyfin_path: str = ""
     javplay_115_min_video_size_mb: int = 300
     javplay_115_junk_keywords: str = (

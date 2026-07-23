@@ -78,7 +78,7 @@ Aria2 看到:   /PATH_IN_ARIA2_CONTAINER/JAV/ABC-123/ABC-123.mp4
 Jellyfin 看到: /jellyfin/115/JAV/ABC-123/ABC-123.mp4
 ```
 
-插件会优先使用 115 的 BT 文件选择能力，只提交主视频文件，避免广告、小视频、HTML、TXT 等文件进入 Jellyfin 扫描目录。如果无法取得 BT 文件清单，默认会拒绝添加任务，而不是污染媒体库。
+插件会优先使用 115 的 BT 文件选择能力，只提交主视频文件，避免广告、小视频、HTML、TXT 等文件进入 Jellyfin 扫描目录。如果 115 临时无法返回 BT 文件清单，插件会先把整包离线到隔离目录，再只移动筛选出的主视频到 Jellyfin 扫描目录。
 
 ### 虚拟影片和消息触发
 
@@ -230,6 +230,7 @@ javplay_strm_url="http://YOUR_NONEBOT_HOST:14514/trigger/{video_id}.mp4"
 | `javplay_storage_mode` | 否 | `aria2_cache` 或 `115_mount`。默认 `aria2_cache` |
 | `javplay_115_cookie` | 否 | 115 Cookie。留空时插件会使用二维码登录 |
 | `javplay_115_savepath` | 是 | 115 任务保存目录 |
+| `javplay_115_temp_savepath` | 否 | BT 清单不可用时的隔离离线目录。留空时使用 `dirname(javplay_115_savepath)/.javplay_tmp` |
 | `javplay_115_mount_jellyfin_path` | `115_mount` 必填 | Jellyfin 容器看到的 115 挂载媒体目录 |
 | `javplay_115_min_video_size_mb` | 否 | 115 文件选择时的主视频最小体积，默认 300 MB |
 | `javplay_115_junk_keywords` | 否 | 115 文件选择时排除的垃圾关键词，逗号分隔 |
@@ -456,6 +457,7 @@ JAVPLAY_WEBHOOK_TOKEN="YOUR_WEBHOOK_TOKEN"
 ```toml
 javplay_storage_mode="115_mount"
 javplay_115_savepath="/jellyfin/jav/media"
+javplay_115_temp_savepath="/jellyfin/.javplay_tmp"
 javplay_115_mount_jellyfin_path="/jellyfin/115/JAV"
 ```
 
@@ -467,7 +469,7 @@ javplay_115_mount_jellyfin_path="/jellyfin/115/JAV"
 
 Jellyfin 只应该扫描这个清洁目录。不要把 115 的下载根目录、临时目录或同步根目录加入 Jellyfin，否则 BT 里的广告、小视频、HTML、TXT 等文件仍可能进入媒体库。
 
-默认配置 `javplay_115_require_wanted_selection=true`。如果插件无法从 115 取得 BT 文件清单和主视频索引，会直接拒绝添加任务，避免污染媒体库。确认你的 115 接口能稳定返回文件清单后，再测试该模式。
+默认配置 `javplay_115_require_wanted_selection=true`。如果插件无法从 115 取得 BT 文件清单和主视频索引，会把整包离线到 `javplay_115_temp_savepath`，等完成后只移动符合体积和垃圾关键词规则的主视频到 `javplay_115_savepath/番号/`。临时目录不要加入 Jellyfin 媒体库。
 
 ## 115 登录
 
