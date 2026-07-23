@@ -387,16 +387,20 @@ def _select_115_file(
             continue
         if min_size_bytes and size and size < min_size_bytes:
             continue
+        code_matched = bool(normalised_video_id and normalised_video_id in normalised_name)
         score = 0
-        if normalised_video_id and normalised_video_id in normalised_name:
+        if code_matched:
             score += 100
         score += _video_extension_score(base_name)
         score += min(size // (1024 * 1024 * 1024), 20)
-        scored.append((score, size, item))
+        scored.append((code_matched, score, size, item))
 
-    scored.sort(key=lambda pair: (pair[0], pair[1]), reverse=True)
+    if any(pair[0] for pair in scored):
+        scored = [pair for pair in scored if pair[0]]
+
+    scored.sort(key=lambda pair: (pair[1], pair[2]), reverse=True)
     if scored:
-        return scored[0][2]
+        return scored[0][3]
 
     legacy_video_files = [
         item for item in files
@@ -568,13 +572,14 @@ def _find_completed_115_file(
     target_savepath: str = "",
     min_size_bytes: int = 0,
     junk_keywords: tuple[str, ...] = DEFAULT_115_JUNK_KEYWORDS,
+    allow_global_search: bool = True,
 ) -> Optional[dict]:
     files = []
     target_dir_id = _get_115_dir_id(client, target_savepath) if target_savepath else ""
     if target_dir_id:
         files = _list_115_dir_files(client, target_dir_id)
 
-    if not files:
+    if not files and allow_global_search:
         files = _search_115_video_files(client, video_id)
 
     return _select_115_file(files, video_id, min_size_bytes, junk_keywords)
@@ -1012,6 +1017,7 @@ def download_to_115_mount(
                 temp_target_savepath if used_isolated_fallback else target_savepath,
                 min_size,
                 junk_list,
+                allow_global_search=not used_isolated_fallback,
             )
             if found_file:
                 logger.info(f"[{video_id}] Found completed mounted 115 file: {_item_name(found_file) or 'unknown'}")
