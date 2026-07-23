@@ -109,7 +109,6 @@ logger.info(
 
 _BASE_REQUIRED_CONFIG_FIELDS = (
     "javplay_115_savepath",
-    "javplay_flaresolverr_url",
     "javplay_jellyfin_url",
     "javplay_jellyfin_api_key",
     "javplay_db_path",
@@ -145,6 +144,8 @@ def _warn_missing_required_config() -> None:
         for field_name in required_fields
         if not getattr(plugin_config, field_name, None)
     ]
+    if not plugin_config.javplay_flaresolverr_url and not plugin_config.javplay_proxy_http:
+        missing.append("javplay_flaresolverr_url or javplay_proxy_http")
     if missing:
         logger.warning(
             "JavPlay required config is incomplete. "
