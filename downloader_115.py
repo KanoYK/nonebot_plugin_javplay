@@ -508,7 +508,7 @@ def _get_115_dir_id(client: "P115Client", path: str) -> str:
     try:
         resp = client.fs_dir_getid(path)
         dir_id = _dir_id_from_response(resp)
-        if dir_id:
+        if dir_id and (dir_id != "0" or path in ("", "/")):
             return dir_id
         logger.info(f"115 directory id not found for {path}: {resp}")
     except Exception as e:
