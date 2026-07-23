@@ -391,6 +391,11 @@ def _select_115_file(
         score = 0
         if code_matched:
             score += 100
+        stem = os.path.splitext(base_name)[0]
+        if normalised_video_id and _normalise_code(stem) == normalised_video_id:
+            score += 80
+        elif normalised_video_id and re.search(r"\(\d+\)$", stem) and normalised_name.startswith(normalised_video_id):
+            score -= 30
         score += _video_extension_score(base_name)
         score += min(size // (1024 * 1024 * 1024), 20)
         scored.append((code_matched, score, size, item))
@@ -934,6 +939,31 @@ def download_to_115_mount(
         selected_file = None
         wanted = ""
         used_isolated_fallback = False
+
+        existing_target_file = _find_completed_115_file(
+            client,
+            video_id,
+            target_savepath,
+            min_size,
+            junk_list,
+            allow_global_search=False,
+        )
+        if existing_target_file:
+            file_name = _item_basename(existing_target_file)
+            cloud_path = posixpath.join(target_savepath, file_name)
+            logger.info(
+                f"[{video_id}] Reusing existing mounted 115 media file: "
+                f"{file_name}, path={cloud_path}"
+            )
+            return {
+                "mode": "115_mount",
+                "info_hash": task_hash,
+                "cloud_path": cloud_path,
+                "savepath": target_savepath,
+                "file_name": file_name,
+                "size": _item_size(existing_target_file),
+                "pickcode": _item_pickcode(existing_target_file),
+            }
 
         if info_hash:
             torrent_files = _torrent_files_from_115(client, info_hash)

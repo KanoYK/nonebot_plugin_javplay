@@ -219,6 +219,24 @@ def _jellyfin_item_paths(item: dict) -> list[str]:
     return paths
 
 
+def _is_virtual_javplay_item(item: dict) -> bool:
+    for path in _jellyfin_item_paths(item or {}):
+        lower_path = path.lower()
+        if lower_path.endswith(".strm") or "/trigger/" in lower_path or "trigger.mp4" in lower_path or "wait.mp4" in lower_path:
+            return True
+    return False
+
+
+def _is_real_javplay_item(item: dict) -> bool:
+    for path in _jellyfin_item_paths(item or {}):
+        lower_path = path.lower()
+        if lower_path.endswith(".strm") or "/trigger/" in lower_path or "trigger.mp4" in lower_path or "wait.mp4" in lower_path:
+            continue
+        if lower_path.endswith((".mp4", ".mkv", ".avi", ".wmv", ".mov", ".ts", ".m2ts", ".flv", ".iso", ".rmvb")):
+            return True
+    return False
+
+
 def _is_javplay_jellyfin_item(item: dict) -> bool:
     media_root = plugin_config.javplay_jellyfin_media_path
     if not media_root:
@@ -243,6 +261,8 @@ def _find_active_jav_playback(expected_video_id: str = "", expected_user_id: str
 
         item = session.get("NowPlayingItem") or {}
         if not _is_javplay_jellyfin_item(item):
+            continue
+        if not _is_virtual_javplay_item(item):
             continue
 
         candidates = [
@@ -610,11 +630,14 @@ async def _finish_download(
     real_media_roots: Optional[list[str]] = None,
 ) -> bool:
     async with task_lock:
-        task = active_downloads.pop(video_id, None)
+        task = active_downloads.get(video_id)
         if gid:
             gid_to_video_id.pop(gid, None)
         if task and not user_id:
             user_id = task.get("user_id")
+        if task:
+            task["status"] = "refreshing"
+            task["gid"] = None
 
     if not task:
         logger.info(f"Download for {video_id} was already finalized or is no longer active.")
@@ -676,11 +699,19 @@ async def _finish_download(
     elif real_item:
         await send_jellyfin_msg(f"影片 {video_id} 已在媒体库中可见，但元数据刷新可能仍在后台进行。", user_id)
     else:
+        async with task_lock:
+            pending_task = active_downloads.get(video_id)
+            if pending_task:
+                pending_task["status"] = "downloaded_pending_scan"
+                pending_task["file_path"] = file_path
         await send_jellyfin_msg(
             f"影片 {video_id} 已下载完成，但 Jellyfin 暂未扫描到真实文件，已保留虚拟入口，请稍后再试。",
             user_id,
         )
         return False
+
+    async with task_lock:
+        active_downloads.pop(video_id, None)
 
     logger.info(f"Download finalized for {video_id}: {file_path or gid}")
     return True
@@ -1003,6 +1034,13 @@ async def handle_jellyfin_webhook(request: Request, background_tasks: Background
             return {"status": "ignored", "reason": "No ItemName"}
 
         user_id = data.get("UserId")
+        if _is_javplay_jellyfin_item(item) and _is_real_javplay_item(item):
+            logger.info(
+                f"Ignored Jellyfin PlaybackStart for real JavPlay media: "
+                f"video_id={video_id}, item_name={item_name!r}, user_id={user_id or ''}"
+            )
+            return {"status": "ignored", "reason": "Real media playback", "video_id": video_id}
+
         if not _is_javplay_jellyfin_item(item):
             active_video_id, active_user_id = await asyncio.to_thread(
                 _find_active_jav_playback,
@@ -1017,6 +1055,12 @@ async def handle_jellyfin_webhook(request: Request, background_tasks: Background
                 return {"status": "ignored", "reason": "Not JavPlay media library", "video_id": video_id}
             video_id = active_video_id
             user_id = user_id or active_user_id
+        elif not _is_virtual_javplay_item(item):
+            logger.info(
+                f"Ignored Jellyfin PlaybackStart for non-virtual JavPlay item: "
+                f"video_id={video_id}, item_name={item_name!r}, user_id={user_id or ''}"
+            )
+            return {"status": "ignored", "reason": "Not virtual JavPlay media", "video_id": video_id}
 
         queued = await _queue_download(video_id, user_id, background_tasks, "jellyfin-webhook")
         if not queued:
