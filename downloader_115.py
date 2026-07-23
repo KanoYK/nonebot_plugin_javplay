@@ -304,6 +304,21 @@ def _default_temp_115_savepath(savepath: str) -> str:
     return posixpath.join(parent, ".javplay_tmp")
 
 
+def _offline_savepath_aliases(path: str) -> list[str]:
+    path = _normalise_115_path(path)
+    aliases = []
+    if path:
+        aliases.append(path)
+        if path.startswith("/云下载/") and not path.startswith("/云下载/云下载/"):
+            aliases.append(posixpath.join("/云下载", path.lstrip("/")))
+
+    result = []
+    for alias in aliases:
+        if alias and alias not in result:
+            result.append(alias)
+    return result
+
+
 def _extract_info_hash(magnet: str) -> str:
     match = re.search(r"(?:btih:|btih%3A)([A-Za-z0-9]{32,40})", magnet or "", re.I)
     return match.group(1).lower() if match else ""
@@ -1051,14 +1066,27 @@ def download_to_115_mount(
         found_file = None
         for attempt in range(max_retries):
             time.sleep(5)
-            found_file = _find_completed_115_file(
-                client,
-                video_id,
-                temp_target_savepath if used_isolated_fallback else target_savepath,
-                min_size,
-                junk_list,
-                allow_global_search=not used_isolated_fallback,
+            lookup_paths = (
+                _offline_savepath_aliases(temp_target_savepath)
+                if used_isolated_fallback
+                else [target_savepath]
             )
+            for lookup_path in lookup_paths:
+                found_file = _find_completed_115_file(
+                    client,
+                    video_id,
+                    lookup_path,
+                    min_size,
+                    junk_list,
+                    allow_global_search=False,
+                    require_code_match=used_isolated_fallback,
+                )
+                if found_file:
+                    logger.info(
+                        f"[{video_id}] Found completed 115 file in {lookup_path}: "
+                        f"{_item_name(found_file) or 'unknown'}"
+                    )
+                    break
             if not found_file and used_isolated_fallback:
                 found_file = _find_completed_115_file(
                     client,
