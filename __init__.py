@@ -1079,7 +1079,6 @@ if scheduler:
         minute=plugin_config.javplay_daily_crawl_minute,
         timezone=plugin_config.javplay_scheduler_timezone,
         id="javplay_daily_library_build",
-        replace_existing=True,
     )
     async def scheduled_library_build():
         if manual_crawl_lock.locked():
