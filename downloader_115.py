@@ -370,6 +370,7 @@ def _select_115_file(
     video_id: str,
     min_size_bytes: int = 0,
     junk_keywords: tuple[str, ...] = DEFAULT_115_JUNK_KEYWORDS,
+    require_code_match: bool = False,
 ) -> Optional[dict]:
     if not files:
         return None
@@ -402,10 +403,15 @@ def _select_115_file(
 
     if any(pair[0] for pair in scored):
         scored = [pair for pair in scored if pair[0]]
+    elif require_code_match:
+        return None
 
     scored.sort(key=lambda pair: (pair[1], pair[2]), reverse=True)
     if scored:
         return scored[0][3]
+
+    if require_code_match:
+        return None
 
     legacy_video_files = [
         item for item in files
@@ -578,6 +584,7 @@ def _find_completed_115_file(
     min_size_bytes: int = 0,
     junk_keywords: tuple[str, ...] = DEFAULT_115_JUNK_KEYWORDS,
     allow_global_search: bool = True,
+    require_code_match: bool = False,
 ) -> Optional[dict]:
     files = []
     target_dir_id = _get_115_dir_id(client, target_savepath) if target_savepath else ""
@@ -587,7 +594,7 @@ def _find_completed_115_file(
     if not files and allow_global_search:
         files = _search_115_video_files(client, video_id)
 
-    return _select_115_file(files, video_id, min_size_bytes, junk_keywords)
+    return _select_115_file(files, video_id, min_size_bytes, junk_keywords, require_code_match)
 
 
 def _move_115_file(client: "P115Client", item: dict, target_savepath: str, video_id: str) -> bool:
@@ -1010,6 +1017,9 @@ def download_to_115_mount(
                 )
                 add_savepath = temp_target_savepath
                 used_isolated_fallback = True
+                if not _ensure_115_dir_id(client, add_savepath):
+                    logger.error(f"[{video_id}] Cannot create isolated 115 temp path: {add_savepath}")
+                    return None
             else:
                 logger.warning(
                     f"[{video_id}] Adding 115 task without wanted selection. "
@@ -1049,6 +1059,21 @@ def download_to_115_mount(
                 junk_list,
                 allow_global_search=not used_isolated_fallback,
             )
+            if not found_file and used_isolated_fallback:
+                found_file = _find_completed_115_file(
+                    client,
+                    video_id,
+                    "",
+                    min_size,
+                    junk_list,
+                    allow_global_search=True,
+                    require_code_match=True,
+                )
+                if found_file:
+                    logger.info(
+                        f"[{video_id}] Found completed 115 file outside isolated path by exact code search: "
+                        f"{_item_name(found_file) or 'unknown'}"
+                    )
             if found_file:
                 logger.info(f"[{video_id}] Found completed mounted 115 file: {_item_name(found_file) or 'unknown'}")
                 break
