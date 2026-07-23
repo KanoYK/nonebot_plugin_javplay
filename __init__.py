@@ -705,7 +705,7 @@ async def _finish_download(
                 pending_task["status"] = "downloaded_pending_scan"
                 pending_task["file_path"] = file_path
         await send_jellyfin_msg(
-            f"影片 {video_id} 已下载完成，但 Jellyfin 暂未扫描到真实文件，已保留虚拟入口，请稍后再试。",
+            f"影片 {video_id} 已下载完成，但 Jellyfin 暂未扫描到真实文件，请稍后再试。",
             user_id,
         )
         return False
@@ -973,6 +973,11 @@ async def background_download_task(video_id: str, user_id: Optional[str] = None)
 
         cloud_path = mount_result.get("cloud_path") or ""
         logger.info(f"115 mount task for {video_id} completed in cloud: {cloud_path}")
+        await asyncio.to_thread(
+            remove_phantom_video,
+            _media_host_path(),
+            video_id,
+        )
         await send_jellyfin_msg(f"影片 {video_id} 已保存到 115 挂载目录，正在刷新媒体库。", user_id)
         await _finish_download(video_id, "", user_id, cloud_path, _real_media_roots_for_finish())
         return
